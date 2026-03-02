@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 import aiohttp
 
-API_BASE = "https://api.lolz.live"
+API_BASE = "https://prod-api.lolz.live"
 DEFAULT_API_TIMEOUT_SECONDS = 30.0
 
 
