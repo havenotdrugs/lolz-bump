@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+state.db
+data/
+.env
+.serena/
+docs/
+example/
+config.yml

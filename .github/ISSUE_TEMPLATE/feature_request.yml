@@ -1,0 +1,23 @@
+name: Feature request
+description: Предложить улучшение
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема
+      placeholder: Какую задачу нужно решить?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предложение
+      placeholder: Как вы видите решение?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      placeholder: Какие варианты рассматривались?

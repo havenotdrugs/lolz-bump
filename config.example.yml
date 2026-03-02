@@ -1,0 +1,15 @@
+window_limit: 5
+api_timeout_seconds: 30
+timezone: Europe/Moscow
+schedule_times:
+  - "06:00"
+  - "18:00"
+important_threads:
+  - 1111111
+  - 2222222
+  - 3333333
+regular_threads:
+  - 4444444
+  - 5555555
+  - 6666666
+  - 7777777

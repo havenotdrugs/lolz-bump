@@ -1,0 +1,12 @@
+services:
+  lolz-bump:
+    build: .
+    image: lolz-bump:latest
+    container_name: lolz-bump
+    env_file:
+      - .env
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./data:/data
+    command: ["--config", "/app/config.yml", "--db", "/data/state.db"]
+    restart: unless-stopped
