@@ -40,12 +40,16 @@ async def bump_thread(
                 status = response.status
                 if status == 429:
                     retry_after_header = response.headers.get("Retry-After", "")
-                    retry_after = float(retry_after_header) if retry_after_header.isdigit() else min(60, 2**attempt)
+                    retry_after = (
+                        float(retry_after_header)
+                        if retry_after_header.isdigit()
+                        else min(60, 2 ** (attempt - 1))
+                    )
                     await sleep_func(retry_after)
                     continue
 
-                if 500 <= status < 600:
-                    await sleep_func(min(30, 2**attempt))
+                if status == 403 or 500 <= status < 600:
+                    await sleep_func(min(30, 2 ** (attempt - 1)))
                     continue
 
                 if status >= 400:
@@ -77,7 +81,7 @@ async def bump_thread(
                     payload=None,
                     error_message="request failed after retries",
                 )
-            await sleep_func(min(30, 2**attempt))
+            await sleep_func(min(30, 2 ** (attempt - 1)))
 
     return BumpResult(
         success=False,
