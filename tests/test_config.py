@@ -24,6 +24,7 @@ regular_threads: [10, 11]
     assert config.window_limit == 5
     assert config.api_timeout_seconds == 30.0
     assert config.schedule_times == ["06:00", "18:00"]
+    assert config.all_schedule_times() == ["06:00", "18:00"]
 
 
 def test_load_config_custom_api_timeout(tmp_path: Path) -> None:
@@ -112,3 +113,72 @@ regular_threads:
     config = load_config(config_path)
     assert config.important_threads == []
     assert config.regular_threads == []
+
+
+def test_load_config_accepts_thread_schedule_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        """
+window_limit: 2
+timezone: Europe/Moscow
+schedule_times:
+  - "06:00"
+important_threads: [1]
+regular_threads: [10, 11]
+thread_schedule_overrides:
+  10:
+    - "12:00"
+  11:
+    - "06:00"
+    - "18:00"
+""".strip()
+    )
+
+    config = load_config(config_path)
+
+    assert config.schedule_times_for_thread(1) == ["06:00"]
+    assert config.schedule_times_for_thread(10) == ["12:00"]
+    assert config.schedule_times_for_thread(11) == ["06:00", "18:00"]
+    assert config.all_schedule_times() == ["06:00", "12:00", "18:00"]
+
+
+def test_load_config_rejects_unknown_thread_schedule_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        """
+window_limit: 2
+timezone: Europe/Moscow
+schedule_times:
+  - "06:00"
+important_threads: [1]
+regular_threads: [10]
+thread_schedule_overrides:
+  99:
+    - "12:00"
+""".strip()
+    )
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+def test_load_config_rejects_too_many_important_for_same_schedule(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        """
+window_limit: 1
+timezone: Europe/Moscow
+schedule_times:
+  - "06:00"
+important_threads: [1, 2]
+regular_threads: []
+thread_schedule_overrides:
+  1:
+    - "06:00"
+  2:
+    - "06:00"
+""".strip()
+    )
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)

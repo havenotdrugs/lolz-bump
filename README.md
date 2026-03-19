@@ -42,9 +42,18 @@ python -m lolz_bump --config config.yml --db state.db --dry-run
 - `window_limit`: лимит тем за одно окно.
 - `api_timeout_seconds`: timeout HTTP-запроса к API в секундах (по умолчанию `30`).
 - `timezone`: временная зона, например `Europe/Moscow`.
-- `schedule_times`: список стартов окон в формате `HH:MM`.
+- `schedule_times`: базовый список стартов окон в формате `HH:MM`.
 - `important_threads`: важные темы (должно быть `<= window_limit`).
 - `regular_threads`: неважные темы для ротации.
+- `thread_schedule_overrides`: необязательные персональные расписания по темам. Если для темы есть override, она будет участвовать только в указанные `HH:MM`. Планировщик запускается по объединению `schedule_times` и всех override-времён.
+
+Во время работы сервис пишет в консоль:
+
+- старт окна с выбранными темами;
+- темы, пропущенные из-за расписания;
+- темы, отложенные из-за `window_limit`;
+- результат каждой попытки bump;
+- итог окна по `success` / `failed`.
 
 ## Docker Compose (рекомендуется)
 

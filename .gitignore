@@ -8,7 +8,5 @@ __pycache__/
 state.db
 data/
 .env
-.serena/
-docs/
 example/
 config.yml

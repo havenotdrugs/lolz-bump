@@ -41,19 +41,23 @@ async def run_async(config_path: str, db_path: str, dry_run: bool) -> None:
             )
 
         if dry_run:
+            schedule_time = config.all_schedule_times()[0]
             summary = await execute_window(
                 config=config,
                 db=db,
                 bump_func=perform_bump,
                 window_started_at="dry-run",
+                schedule_time=schedule_time,
             )
             logging.info(
-                "dry_run_finished",
-                extra={
-                    "total_planned": summary.total_planned,
-                    "success_count": summary.success_count,
-                    "failed_count": summary.failed_count,
-                },
+                "dry_run_finished schedule_time=%s total_planned=%s success_count=%s failed_count=%s selected=%s skipped_by_schedule=%s deferred_regular=%s",
+                summary.schedule_time,
+                summary.total_planned,
+                summary.success_count,
+                summary.failed_count,
+                list(summary.selected_thread_ids),
+                list(summary.skipped_thread_ids),
+                list(summary.deferred_thread_ids),
             )
             return
 
