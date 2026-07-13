@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Awaitable, Callable
-from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-
-from .config import AppConfig
 from .db import BumpAttemptCreate, Database
 from .domain import Priority, select_threads_for_window
 from .lolz_api import BumpResult
+from .settings import SchedulingSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,15 +31,8 @@ def parse_schedule_specs(schedule_times: list[str]) -> list[tuple[int, int]]:
     return result
 
 
-def mark_window_as_started(executed_window_keys: set[str], window_key: str) -> bool:
-    if window_key in executed_window_keys:
-        return False
-    executed_window_keys.add(window_key)
-    return True
-
-
 async def execute_window(
-    config: AppConfig,
+    config: SchedulingSettings,
     db: Database,
     bump_func: Callable[[int], Awaitable[BumpResult]],
     window_started_at: str,
@@ -132,65 +119,3 @@ async def execute_window(
         skipped_thread_ids=tuple(skipped_thread_ids),
         deferred_thread_ids=tuple(deferred_thread_ids),
     )
-
-
-async def run_scheduler(
-    config: AppConfig,
-    db: Database,
-    bump_func: Callable[[int], Awaitable[BumpResult]],
-    timezone_name: str,
-) -> None:
-    timezone = ZoneInfo(timezone_name)
-    scheduler = AsyncIOScheduler(timezone=timezone)
-    execution_lock = asyncio.Lock()
-    executed_window_keys: set[str] = set()
-
-    async def scheduled_job(schedule_time: str) -> None:
-        window_date = datetime.now(timezone).date().isoformat()
-        window_key = f"{window_date}T{schedule_time}"
-        if window_key in executed_window_keys:
-            LOGGER.warning("window_already_executed schedule_time=%s window_key=%s", schedule_time, window_key)
-            return
-        if execution_lock.locked():
-            LOGGER.warning("previous_window_still_running schedule_time=%s window_key=%s", schedule_time, window_key)
-            return
-
-        async with execution_lock:
-            if not mark_window_as_started(executed_window_keys, window_key):
-                LOGGER.warning("window_already_executed schedule_time=%s window_key=%s", schedule_time, window_key)
-                return
-            now = datetime.now(timezone).isoformat(timespec="seconds")
-            try:
-                summary = await execute_window(
-                    config=config,
-                    db=db,
-                    bump_func=bump_func,
-                    window_started_at=now,
-                    schedule_time=schedule_time,
-                )
-            except Exception:
-                LOGGER.exception("window_failed schedule_time=%s window_key=%s", schedule_time, window_key)
-                return
-            LOGGER.info(
-                "window_finished schedule_time=%s total_planned=%s success_count=%s failed_count=%s selected=%s skipped_by_schedule=%s deferred_regular=%s",
-                summary.schedule_time,
-                summary.total_planned,
-                summary.success_count,
-                summary.failed_count,
-                list(summary.selected_thread_ids),
-                list(summary.skipped_thread_ids),
-                list(summary.deferred_thread_ids),
-            )
-
-    for schedule_time in config.all_schedule_times():
-        hour, minute = parse_schedule_specs([schedule_time])[0]
-        scheduler.add_job(
-            scheduled_job,
-            args=[schedule_time],
-            trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone),
-        )
-
-    scheduler.start()
-    LOGGER.info("scheduler_started schedule_times=%s", config.all_schedule_times())
-
-    await asyncio.Event().wait()

@@ -12,7 +12,8 @@ dependencies = [
   "APScheduler>=3.10,<4.0",
   "SQLAlchemy>=2.0,<3.0",
   "pydantic>=2.7,<3.0",
-  "PyYAML>=6.0,<7.0",
+  "aiogram>=3.29,<4.0",
+  "cryptography>=42.0,<51.0",
 ]
 
 [project.optional-dependencies]

@@ -20,6 +20,23 @@ class BumpResult:
     error_message: str | None
 
 
+async def get_thread(
+    session: aiohttp.ClientSession,
+    token: str,
+    thread_id: int,
+    timeout_seconds: float = DEFAULT_API_TIMEOUT_SECONDS,
+) -> BumpResult:
+    url = f"{API_BASE}/threads/{thread_id}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    try:
+        async with session.get(url, headers=headers, timeout=timeout_seconds) as response:
+            if response.status >= 400:
+                return BumpResult(False, thread_id, response.status, 1, None, f"request failed with status {response.status}")
+            return BumpResult(True, thread_id, response.status, 1, await response.json(), None)
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return BumpResult(False, thread_id, None, 1, None, "request failed")
+
+
 async def bump_thread(
     session: aiohttp.ClientSession,
     token: str,

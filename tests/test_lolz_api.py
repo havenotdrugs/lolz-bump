@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from lolz_bump.lolz_api import BumpResult, bump_thread
+from lolz_bump.lolz_api import BumpResult, bump_thread, get_thread
 
 
 class FakeResponse:
@@ -27,6 +27,10 @@ class FakeSession:
         self.calls: list[tuple[tuple, dict]] = []
 
     def post(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self._responses.pop(0)
+
+    def get(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return self._responses.pop(0)
 
@@ -94,3 +98,14 @@ async def test_bump_thread_retries_403_then_success() -> None:
     assert result.status_code == 200
     assert result.attempts == 2
     assert sleeps == [1]
+
+
+@pytest.mark.asyncio
+async def test_get_thread_checks_access_without_bumping() -> None:
+    session = FakeSession([FakeResponse(200, body={"thread_id": 42})])
+
+    result = await get_thread(session=session, token="token", thread_id=42)
+
+    assert result.success is True
+    assert result.status_code == 200
+    assert session.calls[0][0][0].endswith("/threads/42")
