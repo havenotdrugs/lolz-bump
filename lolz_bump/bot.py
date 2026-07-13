@@ -16,7 +16,13 @@ from .db import Database
 from .lolz_api import BumpResult
 from .secrets import SecretStore
 from .service import WindowSummary
-from .settings import DEFAULT_THREAD_DOMAIN, SUPPORTED_THREAD_DOMAINS, SchedulingSettings, validate_schedule_times
+from .settings import (
+    DEFAULT_THREAD_DOMAIN,
+    SUPPORTED_THREAD_DOMAINS,
+    PostingTemplate,
+    SchedulingSettings,
+    validate_schedule_times,
+)
 
 PAGE_SIZE = 6
 THREAD_PATH_PATTERN = re.compile(r"/threads/([1-9][0-9]*)(?:/.*)?$")
@@ -68,9 +74,15 @@ class TelegramControl:
                 return
             if self._db.get_encrypted_lolz_token() is None:
                 self._pending[message.from_user.id] = ("token", ())
-                await self._show(message.from_user.id, message.chat.id, "Отправьте LOLZ_API_TOKEN.", self._back_keyboard("root"))
+                await self._show(
+                    message.from_user.id,
+                    message.chat.id,
+                    "Отправьте LOLZ_API_TOKEN.",
+                    self._back_keyboard("root"),
+                    new_message=True,
+                )
             else:
-                await self._root(message.from_user.id, message.chat.id)
+                await self._root(message.from_user.id, message.chat.id, new_message=True)
 
         @self._router.callback_query()
         async def callback(query: CallbackQuery) -> None:
@@ -107,12 +119,35 @@ class TelegramControl:
             await self._category(user_id, chat_id, data[1], int(data[2]))
         elif data[:2] == ["thread", "important"] or data[:2] == ["thread", "regular"]:
             await self._thread(user_id, chat_id, data[1], int(data[2]), int(data[3]))
+        elif data[:1] == ["templates"]:
+            await self._templates(user_id, chat_id, int(data[1]))
+        elif data[:1] == ["template"]:
+            await self._template(user_id, chat_id, int(data[1]))
+        elif data == ["template_add"]:
+            self._pending[user_id] = ("template_name", ())
+            await self._show(user_id, chat_id, "Отправьте название шаблона.", self._back_keyboard("system"))
+        elif data[:1] == ["template_schedule"]:
+            self._pending[user_id] = ("template_schedule", (data[1],))
+            await self._show(user_id, chat_id, "Отправьте HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard(f"template:{data[1]}"))
+        elif data[:1] == ["template_rename"]:
+            self._pending[user_id] = ("template_rename", (data[1],))
+            await self._show(user_id, chat_id, "Отправьте новое название шаблона.", self._back_keyboard(f"template:{data[1]}"))
+        elif data[:1] == ["template_delete"]:
+            await self._delete_template(user_id, chat_id, int(data[1]))
         elif data[0] == "add":
             self._pending[user_id] = ("thread_id", (data[1], data[2]))
             await self._show(user_id, chat_id, "Отправьте ID или ссылку на тему.", self._back_keyboard(f"category:{data[1]}:{data[2]}"))
         elif data[0] == "schedule":
             self._pending[user_id] = ("schedule", tuple(data[1:]))
-            await self._show(user_id, chat_id, "Отправьте HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard(f"thread:{data[1]}:{data[2]}:{data[3]}"))
+            await self._schedule_choice(user_id, chat_id)
+        elif data == ["schedule_choice"]:
+            await self._schedule_choice(user_id, chat_id)
+        elif data == ["schedule_input"]:
+            await self._schedule_input(user_id, chat_id)
+        elif data[:1] == ["schedule_templates"]:
+            await self._template_choices(user_id, chat_id, int(data[1]))
+        elif data[:1] == ["use_template"]:
+            await self._apply_template(user_id, chat_id, int(data[1]))
         elif data[0] == "delete":
             await self._delete_thread(user_id, chat_id, data[1], int(data[2]), int(data[3]))
         elif data[0] == "history":
@@ -140,38 +175,72 @@ class TelegramControl:
                 if not result.success:
                     raise ValueError("Тема недоступна для токена.")
                 self._pending[user_id] = ("new_schedule", (context[0], context[1], str(thread_id), thread_domain))
-                await self._show(user_id, chat_id, "Отправьте график HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard(f"category:{context[0]}:{context[1]}"))
+                await self._schedule_choice(user_id, chat_id)
+                return
+            if action == "template_name":
+                settings = self._db.get_settings()
+                name = self._validate_template_name(value, settings)
+                self._pending[user_id] = ("template_schedule_new", (name,))
+                await self._show(user_id, chat_id, "Отправьте HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard("system"))
+                return
+            if action == "template_rename":
+                settings = self._db.get_settings()
+                template_id = int(context[0])
+                template = self._find_template(settings, template_id)
+                if template is None:
+                    raise ValueError("Шаблон не найден.")
+                name = self._validate_template_name(value, settings, excluded_id=template_id)
+                templates = [
+                    PostingTemplate(id=item.id, name=name if item.id == template_id else item.name, schedule_times=item.schedule_times)
+                    for item in settings.posting_templates
+                ]
+                self._save_settings(settings, posting_templates=templates, reload_scheduler=False)
+                await self._template(user_id, chat_id, template_id)
                 return
             times = validate_schedule_times([line.strip() for line in value.splitlines() if line.strip()], "schedule")
             if not times:
                 raise ValueError("Укажите хотя бы одно время.")
+            if action == "template_schedule_new":
+                settings = self._db.get_settings()
+                template = PostingTemplate(
+                    id=self._next_template_id(settings),
+                    name=context[0],
+                    schedule_times=times,
+                )
+                self._save_settings(settings, posting_templates=[*settings.posting_templates, template], reload_scheduler=False)
+                await self._templates(user_id, chat_id, 0)
+                return
+            if action == "template_schedule":
+                settings = self._db.get_settings()
+                template_id = int(context[0])
+                template = self._find_template(settings, template_id)
+                if template is None:
+                    raise ValueError("Шаблон не найден.")
+                templates = [
+                    PostingTemplate(
+                        id=item.id,
+                        name=item.name,
+                        schedule_times=times if item.id == template_id else item.schedule_times,
+                    )
+                    for item in settings.posting_templates
+                ]
+                self._save_settings(settings, posting_templates=templates, reload_scheduler=False)
+                await self._template(user_id, chat_id, template_id)
+                return
             settings = self._db.get_settings()
-            if action == "new_schedule":
-                priority, page, thread_id_raw, thread_domain = context
-                thread_id = int(thread_id_raw)
-                changes = {"important_threads": settings.important_threads + [thread_id]} if priority == "important" else {"regular_threads": settings.regular_threads + [thread_id]}
-                domains = dict(settings.thread_domains)
-                domains[thread_id] = thread_domain
-                changes["thread_domains"] = domains
-            else:
-                priority, thread_id_raw, page = context
-                thread_id = int(thread_id_raw)
-                changes = {}
-            overrides = dict(settings.thread_schedule_overrides)
-            overrides[thread_id] = times
-            changes["thread_schedule_overrides"] = overrides
-            self._save_settings(settings, **changes)
-            await self._category(user_id, chat_id, priority, int(page))
+            priority, page = self._save_thread_schedule(settings, action, context, times)
+            await self._category(user_id, chat_id, priority, page)
         except (ValueError, TypeError):
-            await self._show(user_id, chat_id, "Не удалось сохранить значение. Повторите действие.", self._back_keyboard("root"))
+            back = "system" if action.startswith("template") else "root"
+            await self._show(user_id, chat_id, "Не удалось сохранить значение. Повторите действие.", self._back_keyboard(back))
 
-    async def _root(self, user_id: int, chat_id: int) -> None:
+    async def _root(self, user_id: int, chat_id: int, new_message: bool = False) -> None:
         builder = InlineKeyboardBuilder()
         builder.button(text="Темы", callback_data="themes")
         builder.button(text="История", callback_data="history:0")
         builder.button(text="Системные настройки", callback_data="system")
         builder.adjust(1)
-        await self._show(user_id, chat_id, "Главное меню", builder.as_markup())
+        await self._show(user_id, chat_id, "Главное меню", builder.as_markup(), new_message=new_message)
 
     async def _themes(self, user_id: int, chat_id: int) -> None:
         builder = InlineKeyboardBuilder()
@@ -202,6 +271,50 @@ class TelegramControl:
         builder.button(text="Назад", callback_data=f"category:{priority}:{page}")
         builder.adjust(1)
         await self._show(user_id, chat_id, f"Тема {thread_url(thread_id, settings.thread_domains[thread_id])}\nГрафик:\n" + "\n".join(times), builder.as_markup())
+
+    async def _schedule_choice(self, user_id: int, chat_id: int) -> None:
+        pending = self._pending.get(user_id)
+        if pending is None or pending[0] not in {"new_schedule", "schedule"}:
+            await self._themes(user_id, chat_id)
+            return
+        action, context = pending
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Ввести график", callback_data="schedule_input")
+        builder.button(text="Выбрать шаблон", callback_data="schedule_templates:0")
+        if action == "new_schedule":
+            back = f"category:{context[0]}:{context[1]}"
+        else:
+            back = f"thread:{context[0]}:{context[1]}:{context[2]}"
+        builder.button(text="Назад", callback_data=back)
+        builder.adjust(1)
+        await self._show(user_id, chat_id, "Выберите способ задания графика.", builder.as_markup())
+
+    async def _schedule_input(self, user_id: int, chat_id: int) -> None:
+        pending = self._pending.get(user_id)
+        if pending is None:
+            await self._themes(user_id, chat_id)
+            return
+        action, _ = pending
+        if action not in {"new_schedule", "schedule"}:
+            await self._themes(user_id, chat_id)
+            return
+        await self._show(user_id, chat_id, "Отправьте HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard("schedule_choice"))
+
+    async def _template_choices(self, user_id: int, chat_id: int, page: int) -> None:
+        pending = self._pending.get(user_id)
+        if pending is None or pending[0] not in {"new_schedule", "schedule"}:
+            await self._themes(user_id, chat_id)
+            return
+        templates = self._db.get_settings().posting_templates
+        builder = InlineKeyboardBuilder()
+        for template in templates[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
+            builder.button(text=f"{template.name}: {', '.join(template.schedule_times)}", callback_data=f"use_template:{template.id}")
+        if not templates:
+            builder.button(text="Создать шаблон", callback_data="template_add")
+        self._pagination(builder, page, len(templates), "schedule_templates")
+        builder.button(text="Назад", callback_data="schedule_choice")
+        builder.adjust(1)
+        await self._show(user_id, chat_id, "Выберите шаблон постинга.", builder.as_markup())
 
     async def _delete_thread(self, user_id: int, chat_id: int, priority: str, thread_id: int, page: int) -> None:
         settings = self._db.get_settings()
@@ -237,15 +350,102 @@ class TelegramControl:
     async def _system(self, user_id: int, chat_id: int) -> None:
         builder = InlineKeyboardBuilder()
         builder.button(text="Задать LOLZ_API_TOKEN", callback_data="token")
+        builder.button(text="Шаблоны постинга", callback_data="templates:0")
         builder.button(text="Назад", callback_data="root")
         builder.adjust(1)
         await self._show(user_id, chat_id, "Системные настройки", builder.as_markup())
 
-    def _save_settings(self, settings: SchedulingSettings, **changes: object) -> None:
+    async def _templates(self, user_id: int, chat_id: int, page: int) -> None:
+        templates = self._db.get_settings().posting_templates
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Добавить шаблон", callback_data="template_add")
+        for template in templates[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
+            builder.button(text=template.name, callback_data=f"template:{template.id}")
+        self._pagination(builder, page, len(templates), "templates")
+        builder.button(text="Назад", callback_data="system")
+        builder.adjust(1)
+        await self._show(user_id, chat_id, "Шаблоны постинга", builder.as_markup())
+
+    async def _template(self, user_id: int, chat_id: int, template_id: int) -> None:
+        template = self._find_template(self._db.get_settings(), template_id)
+        if template is None:
+            await self._templates(user_id, chat_id, 0)
+            return
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Изменить расписание", callback_data=f"template_schedule:{template.id}")
+        builder.button(text="Переименовать", callback_data=f"template_rename:{template.id}")
+        builder.button(text="Удалить шаблон", callback_data=f"template_delete:{template.id}")
+        builder.button(text="Назад", callback_data="templates:0")
+        builder.adjust(1)
+        await self._show(user_id, chat_id, f"Шаблон: {template.name}\nГрафик:\n" + "\n".join(template.schedule_times), builder.as_markup())
+
+    async def _delete_template(self, user_id: int, chat_id: int, template_id: int) -> None:
+        settings = self._db.get_settings()
+        templates = [template for template in settings.posting_templates if template.id != template_id]
+        if len(templates) == len(settings.posting_templates):
+            await self._templates(user_id, chat_id, 0)
+            return
+        self._save_settings(settings, posting_templates=templates, reload_scheduler=False)
+        await self._templates(user_id, chat_id, 0)
+
+    def _save_settings(self, settings: SchedulingSettings, reload_scheduler: bool = True, **changes: object) -> None:
         payload = settings.model_dump()
         payload.update(changes)
         self._db.save_settings(SchedulingSettings.model_validate(payload))
-        self._reload_scheduler()
+        if reload_scheduler:
+            self._reload_scheduler()
+
+    def _find_template(self, settings: SchedulingSettings, template_id: int) -> PostingTemplate | None:
+        return next((template for template in settings.posting_templates if template.id == template_id), None)
+
+    def _next_template_id(self, settings: SchedulingSettings) -> int:
+        return max((template.id for template in settings.posting_templates), default=0) + 1
+
+    def _validate_template_name(self, value: str, settings: SchedulingSettings, excluded_id: int | None = None) -> str:
+        name = value.strip()
+        if not name or len(name) > 64:
+            raise ValueError("invalid posting template name")
+        if any(template.name == name and template.id != excluded_id for template in settings.posting_templates):
+            raise ValueError("duplicate posting template name")
+        return name
+
+    def _save_thread_schedule(
+        self,
+        settings: SchedulingSettings,
+        action: str,
+        context: tuple[str, ...],
+        times: list[str],
+    ) -> tuple[str, int]:
+        if action == "new_schedule":
+            priority, page, thread_id_raw, thread_domain = context
+            thread_id = int(thread_id_raw)
+            changes = {"important_threads": settings.important_threads + [thread_id]} if priority == "important" else {"regular_threads": settings.regular_threads + [thread_id]}
+            domains = dict(settings.thread_domains)
+            domains[thread_id] = thread_domain
+            changes["thread_domains"] = domains
+        else:
+            priority, thread_id_raw, page = context
+            thread_id = int(thread_id_raw)
+            changes = {}
+        overrides = dict(settings.thread_schedule_overrides)
+        overrides[thread_id] = list(times)
+        changes["thread_schedule_overrides"] = overrides
+        self._save_settings(settings, **changes)
+        return priority, int(page)
+
+    async def _apply_template(self, user_id: int, chat_id: int, template_id: int) -> None:
+        pending = self._pending.pop(user_id, None)
+        if pending is None or pending[0] not in {"new_schedule", "schedule"}:
+            await self._themes(user_id, chat_id)
+            return
+        settings = self._db.get_settings()
+        template = self._find_template(settings, template_id)
+        if template is None:
+            self._pending[user_id] = pending
+            await self._template_choices(user_id, chat_id, 0)
+            return
+        priority, page = self._save_thread_schedule(settings, pending[0], pending[1], template.schedule_times)
+        await self._category(user_id, chat_id, priority, page)
 
     def _pagination(self, builder: InlineKeyboardBuilder, page: int, total: int, prefix: str) -> None:
         if page > 0:
@@ -267,14 +467,22 @@ class TelegramControl:
                 continue
             await asyncio.sleep(1 / 30)
 
-    async def _show(self, user_id: int, chat_id: int, text: str, keyboard: InlineKeyboardMarkup) -> None:
-        dashboard = self._db.get_dashboard_message(user_id)
-        if dashboard is not None:
-            try:
-                await self._bot.edit_message_text(text=text, chat_id=dashboard[0], message_id=dashboard[1], reply_markup=keyboard)
-                return
-            except TelegramBadRequest as exc:
-                if "message is not modified" in str(exc):
+    async def _show(
+        self,
+        user_id: int,
+        chat_id: int,
+        text: str,
+        keyboard: InlineKeyboardMarkup,
+        new_message: bool = False,
+    ) -> None:
+        if not new_message:
+            dashboard = self._db.get_dashboard_message(user_id)
+            if dashboard is not None:
+                try:
+                    await self._bot.edit_message_text(text=text, chat_id=dashboard[0], message_id=dashboard[1], reply_markup=keyboard)
                     return
+                except TelegramBadRequest as exc:
+                    if "message is not modified" in str(exc):
+                        return
         message = await self._bot.send_message(chat_id, text, reply_markup=keyboard)
         self._db.set_dashboard_message(user_id, chat_id, message.message_id)

@@ -21,6 +21,22 @@ def validate_schedule_times(value: list[str], field_name: str) -> list[str]:
     return sorted(set(value))
 
 
+class PostingTemplate(BaseModel):
+    id: int = Field(gt=0)
+    name: str = Field(min_length=1, max_length=64)
+    schedule_times: list[str] = Field(min_length=1)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("schedule_times")
+    @classmethod
+    def validate_schedule(cls, value: list[str]) -> list[str]:
+        return validate_schedule_times(value, "posting_template.schedule_times")
+
+
 class SchedulingSettings(BaseModel):
     window_limit: int = Field(default=1, gt=0)
     schedule_times: list[str] = Field(default_factory=list)
@@ -28,6 +44,7 @@ class SchedulingSettings(BaseModel):
     regular_threads: list[int] = Field(default_factory=list)
     thread_domains: dict[int, str] = Field(default_factory=dict)
     thread_schedule_overrides: dict[int, list[str]] = Field(default_factory=dict)
+    posting_templates: list[PostingTemplate] = Field(default_factory=list)
 
     @field_validator("important_threads", "regular_threads", mode="before")
     @classmethod
@@ -66,6 +83,20 @@ class SchedulingSettings(BaseModel):
     @classmethod
     def normalize_schedule_overrides(cls, value: Any) -> Any:
         return {} if value is None else value
+
+    @field_validator("posting_templates", mode="before")
+    @classmethod
+    def normalize_posting_templates(cls, value: Any) -> Any:
+        return [] if value is None else value
+
+    @field_validator("posting_templates")
+    @classmethod
+    def validate_posting_templates(cls, value: list[PostingTemplate]) -> list[PostingTemplate]:
+        if len({template.id for template in value}) != len(value):
+            raise ValueError("duplicate posting template ids")
+        if len({template.name for template in value}) != len(value):
+            raise ValueError("duplicate posting template names")
+        return value
 
     @field_validator("thread_schedule_overrides")
     @classmethod

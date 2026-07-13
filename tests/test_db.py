@@ -4,7 +4,7 @@ from pathlib import Path
 
 from lolz_bump.db import BumpAttemptCreate, Database
 from lolz_bump.domain import Priority
-from lolz_bump.settings import SchedulingSettings
+from lolz_bump.settings import PostingTemplate, SchedulingSettings
 
 
 def test_regular_index_persists(tmp_path: Path) -> None:
@@ -53,6 +53,26 @@ def test_scheduling_settings_persist_without_yaml(tmp_path: Path) -> None:
     db.save_settings(settings)
 
     assert Database(tmp_path / "state.db").get_settings() == settings
+
+
+def test_posting_templates_persist_and_legacy_settings_get_empty_templates(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    db = Database(path)
+    settings = SchedulingSettings(
+        posting_templates=[PostingTemplate(id=1, name="Утро", schedule_times=["06:00"])]
+    )
+
+    db.save_settings(settings)
+
+    assert Database(path).get_settings().posting_templates == settings.posting_templates
+
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE scheduling_settings SET payload = ? WHERE id = 1",
+            (json.dumps(SchedulingSettings().model_dump(exclude={"posting_templates"})),),
+        )
+
+    assert Database(path).get_settings().posting_templates == []
 
 
 def test_get_settings_migrates_missing_thread_domains(tmp_path: Path) -> None:
