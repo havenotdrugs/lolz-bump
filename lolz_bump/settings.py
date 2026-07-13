@@ -4,6 +4,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+DEFAULT_THREAD_DOMAIN = "lolz.live"
+SUPPORTED_THREAD_DOMAINS = frozenset({DEFAULT_THREAD_DOMAIN, "zelenka.guru"})
+
 
 def validate_schedule_times(value: list[str], field_name: str) -> list[str]:
     for item in value:
@@ -23,6 +26,7 @@ class SchedulingSettings(BaseModel):
     schedule_times: list[str] = Field(default_factory=list)
     important_threads: list[int] = Field(default_factory=list)
     regular_threads: list[int] = Field(default_factory=list)
+    thread_domains: dict[int, str] = Field(default_factory=dict)
     thread_schedule_overrides: dict[int, list[str]] = Field(default_factory=dict)
 
     @field_validator("important_threads", "regular_threads", mode="before")
@@ -43,6 +47,20 @@ class SchedulingSettings(BaseModel):
     @classmethod
     def validate_root_schedule_times(cls, value: list[str]) -> list[str]:
         return validate_schedule_times(value, "schedule_times")
+
+    @field_validator("thread_domains", mode="before")
+    @classmethod
+    def normalize_thread_domains(cls, value: Any) -> Any:
+        return {} if value is None else value
+
+    @field_validator("thread_domains")
+    @classmethod
+    def validate_thread_domains(cls, value: dict[int, str]) -> dict[int, str]:
+        if any(thread_id <= 0 for thread_id in value):
+            raise ValueError("thread domain ids must be positive")
+        if any(domain and domain not in SUPPORTED_THREAD_DOMAINS for domain in value.values()):
+            raise ValueError("unsupported thread domain")
+        return value
 
     @field_validator("thread_schedule_overrides", mode="before")
     @classmethod
@@ -65,9 +83,16 @@ class SchedulingSettings(BaseModel):
         if set(self.important_threads) & set(self.regular_threads):
             raise ValueError("thread cannot be both important and regular")
         configured_threads = set(self.important_threads + self.regular_threads)
+        unknown_domain_threads = set(self.thread_domains) - configured_threads
+        if unknown_domain_threads:
+            raise ValueError("thread_domains contains unknown thread ids")
         unknown_override_threads = set(self.thread_schedule_overrides) - configured_threads
         if unknown_override_threads:
             raise ValueError("thread_schedule_overrides contains unknown thread ids")
+        self.thread_domains = {
+            thread_id: self.thread_domains.get(thread_id) or DEFAULT_THREAD_DOMAIN
+            for thread_id in configured_threads
+        }
         for schedule_time in self.all_schedule_times():
             important_count = sum(
                 1

@@ -174,7 +174,12 @@ class Database:
             record = session.get(SchedulingSettingsRecord, 1)
             if record is None:  # pragma: no cover
                 return SchedulingSettings()
-            return SchedulingSettings.model_validate_json(record.payload)
+            settings = SchedulingSettings.model_validate_json(record.payload)
+            migrated_payload = settings.model_dump_json()
+            if record.payload != migrated_payload:
+                record.payload = migrated_payload
+                session.commit()
+            return settings
 
     def save_settings(self, settings: SchedulingSettings) -> None:
         with Session(self._engine) as session:

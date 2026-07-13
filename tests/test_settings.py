@@ -19,3 +19,15 @@ def test_settings_rejects_too_many_important_threads_for_one_window() -> None:
             schedule_times=["06:00"],
             important_threads=[1, 2],
         )
+
+
+def test_settings_adds_default_domain_for_existing_threads() -> None:
+    settings = SchedulingSettings.model_validate(
+        {
+            "important_threads": [1],
+            "regular_threads": [2],
+            "thread_domains": {"1": "zelenka.guru", "2": ""},
+        }
+    )
+
+    assert settings.thread_domains == {1: "zelenka.guru", 2: "lolz.live"}

@@ -5,6 +5,8 @@ services:
     container_name: lolz-bump
     env_file:
       - .env
+    environment:
+      STATE_DB_PATH: /data/state.db
     volumes:
       - ./data:/data
       - lolz-bump-secrets:/secrets

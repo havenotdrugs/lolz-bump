@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from urllib.parse import urlsplit
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -14,9 +16,28 @@ from .db import Database
 from .lolz_api import BumpResult
 from .secrets import SecretStore
 from .service import WindowSummary
-from .settings import SchedulingSettings, validate_schedule_times
+from .settings import DEFAULT_THREAD_DOMAIN, SUPPORTED_THREAD_DOMAINS, SchedulingSettings, validate_schedule_times
 
 PAGE_SIZE = 6
+THREAD_PATH_PATTERN = re.compile(r"/threads/([1-9][0-9]*)(?:/.*)?$")
+
+
+def parse_thread_reference(value: str) -> tuple[int, str]:
+    reference = value.strip()
+    if re.fullmatch(r"[1-9][0-9]*", reference):
+        return int(reference), DEFAULT_THREAD_DOMAIN
+    parsed = urlsplit(reference)
+    domain = parsed.netloc.lower()
+    if parsed.scheme != "https" or domain not in SUPPORTED_THREAD_DOMAINS:
+        raise ValueError("unsupported thread reference")
+    match = THREAD_PATH_PATTERN.fullmatch(parsed.path)
+    if match is None:
+        raise ValueError("unsupported thread reference")
+    return int(match.group(1)), domain
+
+
+def thread_url(thread_id: int, domain: str) -> str:
+    return f"https://{domain}/threads/{thread_id}/"
 
 
 class TelegramControl:
@@ -88,7 +109,7 @@ class TelegramControl:
             await self._thread(user_id, chat_id, data[1], int(data[2]), int(data[3]))
         elif data[0] == "add":
             self._pending[user_id] = ("thread_id", (data[1], data[2]))
-            await self._show(user_id, chat_id, "Отправьте ID темы.", self._back_keyboard(f"category:{data[1]}:{data[2]}"))
+            await self._show(user_id, chat_id, "Отправьте ID или ссылку на тему.", self._back_keyboard(f"category:{data[1]}:{data[2]}"))
         elif data[0] == "schedule":
             self._pending[user_id] = ("schedule", tuple(data[1:]))
             await self._show(user_id, chat_id, "Отправьте HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard(f"thread:{data[1]}:{data[2]}:{data[3]}"))
@@ -114,13 +135,11 @@ class TelegramControl:
                 await self._root(user_id, chat_id)
                 return
             if action == "thread_id":
-                thread_id = int(value.strip())
-                if thread_id <= 0:
-                    raise ValueError("ID темы должен быть положительным.")
+                thread_id, thread_domain = parse_thread_reference(value)
                 result = await self._check_thread(thread_id)
                 if not result.success:
                     raise ValueError("Тема недоступна для токена.")
-                self._pending[user_id] = ("new_schedule", (context[0], context[1], str(thread_id)))
+                self._pending[user_id] = ("new_schedule", (context[0], context[1], str(thread_id), thread_domain))
                 await self._show(user_id, chat_id, "Отправьте график HH:MM. Несколько значений — каждое с новой строки.", self._back_keyboard(f"category:{context[0]}:{context[1]}"))
                 return
             times = validate_schedule_times([line.strip() for line in value.splitlines() if line.strip()], "schedule")
@@ -128,9 +147,12 @@ class TelegramControl:
                 raise ValueError("Укажите хотя бы одно время.")
             settings = self._db.get_settings()
             if action == "new_schedule":
-                priority, page, thread_id_raw = context
+                priority, page, thread_id_raw, thread_domain = context
                 thread_id = int(thread_id_raw)
                 changes = {"important_threads": settings.important_threads + [thread_id]} if priority == "important" else {"regular_threads": settings.regular_threads + [thread_id]}
+                domains = dict(settings.thread_domains)
+                domains[thread_id] = thread_domain
+                changes["thread_domains"] = domains
             else:
                 priority, thread_id_raw, page = context
                 thread_id = int(thread_id_raw)
@@ -172,20 +194,23 @@ class TelegramControl:
         await self._show(user_id, chat_id, title, builder.as_markup())
 
     async def _thread(self, user_id: int, chat_id: int, priority: str, thread_id: int, page: int) -> None:
-        times = self._db.get_settings().schedule_times_for_thread(thread_id)
+        settings = self._db.get_settings()
+        times = settings.schedule_times_for_thread(thread_id)
         builder = InlineKeyboardBuilder()
         builder.button(text="Задать график поднятия", callback_data=f"schedule:{priority}:{thread_id}:{page}")
         builder.button(text="Удалить тему", callback_data=f"delete:{priority}:{thread_id}:{page}")
         builder.button(text="Назад", callback_data=f"category:{priority}:{page}")
         builder.adjust(1)
-        await self._show(user_id, chat_id, f"Тема {thread_id}\nГрафик:\n" + "\n".join(times), builder.as_markup())
+        await self._show(user_id, chat_id, f"Тема {thread_url(thread_id, settings.thread_domains[thread_id])}\nГрафик:\n" + "\n".join(times), builder.as_markup())
 
     async def _delete_thread(self, user_id: int, chat_id: int, priority: str, thread_id: int, page: int) -> None:
         settings = self._db.get_settings()
         overrides = dict(settings.thread_schedule_overrides)
         overrides.pop(thread_id, None)
+        domains = dict(settings.thread_domains)
+        domains.pop(thread_id, None)
         changes = {"important_threads": [item for item in settings.important_threads if item != thread_id]} if priority == "important" else {"regular_threads": [item for item in settings.regular_threads if item != thread_id]}
-        self._save_settings(settings, thread_schedule_overrides=overrides, **changes)
+        self._save_settings(settings, thread_schedule_overrides=overrides, thread_domains=domains, **changes)
         await self._category(user_id, chat_id, priority, page)
 
     async def _history(self, user_id: int, chat_id: int, page: int) -> None:
