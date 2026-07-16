@@ -20,7 +20,6 @@ class WindowSummary:
     failed_count: int
     selected_thread_ids: tuple[int, ...]
     skipped_thread_ids: tuple[int, ...]
-    deferred_thread_ids: tuple[int, ...]
 
 
 def parse_schedule_specs(schedule_times: list[str]) -> list[tuple[int, int]]:
@@ -38,42 +37,28 @@ async def execute_window(
     window_started_at: str,
     schedule_time: str,
 ) -> WindowSummary:
-    regular_index = db.get_regular_index()
     active_thread_ids = {
         thread_id
         for thread_id in config.important_threads + config.regular_threads
         if config.is_thread_scheduled(thread_id, schedule_time)
     }
-    selected, next_regular_index = select_threads_for_window(
+    selected = select_threads_for_window(
         important_threads=config.important_threads,
         regular_threads=config.regular_threads,
         active_thread_ids=active_thread_ids,
-        window_limit=config.window_limit,
-        regular_index=regular_index,
     )
     selected_thread_ids = [planned.thread_id for planned in selected]
-    selected_regular_thread_ids = {
-        planned.thread_id for planned in selected if planned.priority == Priority.REGULAR
-    }
     skipped_thread_ids = [
         thread_id
         for thread_id in config.important_threads + config.regular_threads
         if thread_id not in active_thread_ids
     ]
-    deferred_thread_ids = [
-        thread_id
-        for thread_id in config.regular_threads
-        if thread_id in active_thread_ids and thread_id not in selected_regular_thread_ids
-    ]
-
     LOGGER.info(
-        "window_started schedule_time=%s window_started_at=%s regular_index=%s selected=%s skipped_by_schedule=%s deferred_regular=%s",
+        "window_started schedule_time=%s window_started_at=%s selected=%s skipped_by_schedule=%s",
         schedule_time,
         window_started_at,
-        regular_index,
         selected_thread_ids,
         skipped_thread_ids,
-        deferred_thread_ids,
     )
 
     success_count = 0
@@ -108,8 +93,6 @@ async def execute_window(
         else:
             failed_count += 1
 
-    db.set_regular_index(next_regular_index)
-
     return WindowSummary(
         schedule_time=schedule_time,
         total_planned=len(selected),
@@ -117,5 +100,4 @@ async def execute_window(
         failed_count=failed_count,
         selected_thread_ids=tuple(selected_thread_ids),
         skipped_thread_ids=tuple(skipped_thread_ids),
-        deferred_thread_ids=tuple(deferred_thread_ids),
     )

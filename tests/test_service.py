@@ -9,10 +9,9 @@ from lolz_bump.settings import SchedulingSettings
 
 
 @pytest.mark.asyncio
-async def test_execute_window_priorities_and_rotation(tmp_path: Path) -> None:
+async def test_execute_window_processes_all_threads_in_priority_order(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.db")
     config = SchedulingSettings(
-        window_limit=5,
         schedule_times=["06:00", "18:00"],
         important_threads=[1, 2, 3],
         regular_threads=[10, 11, 12],
@@ -46,12 +45,11 @@ async def test_execute_window_priorities_and_rotation(tmp_path: Path) -> None:
         schedule_time="18:00",
     )
 
-    assert summary1.total_planned == 5
-    assert summary2.total_planned == 5
-    assert list(summary1.selected_thread_ids) == [1, 2, 3, 10, 11]
-    assert list(summary2.selected_thread_ids) == [1, 2, 3, 12, 10]
-    assert called == [1, 2, 3, 10, 11, 1, 2, 3, 12, 10]
-    assert db.get_regular_index() == 1
+    assert summary1.total_planned == 6
+    assert summary2.total_planned == 6
+    assert list(summary1.selected_thread_ids) == [1, 2, 3, 10, 11, 12]
+    assert list(summary2.selected_thread_ids) == [1, 2, 3, 10, 11, 12]
+    assert called == [1, 2, 3, 10, 11, 12, 1, 2, 3, 10, 11, 12]
 
 
 def test_build_cron_specs() -> None:
@@ -65,7 +63,6 @@ def test_build_cron_specs() -> None:
 async def test_execute_window_respects_thread_schedule_overrides(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.db")
     config = SchedulingSettings(
-        window_limit=3,
         schedule_times=["06:00"],
         important_threads=[1, 2],
         regular_threads=[10, 11, 12],
@@ -101,4 +98,3 @@ async def test_execute_window_respects_thread_schedule_overrides(tmp_path: Path)
     assert called == [1, 11, 12]
     assert list(summary.selected_thread_ids) == [1, 11, 12]
     assert list(summary.skipped_thread_ids) == [2, 10]
-    assert list(summary.deferred_thread_ids) == []

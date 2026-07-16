@@ -7,19 +7,6 @@ from lolz_bump.domain import Priority
 from lolz_bump.settings import PostingTemplate, SchedulingSettings
 
 
-def test_regular_index_persists(tmp_path: Path) -> None:
-    db_path = tmp_path / "state.db"
-    db = Database(db_path)
-
-    assert db.get_regular_index() == 0
-
-    db.set_regular_index(3)
-    assert db.get_regular_index() == 3
-
-    db2 = Database(db_path)
-    assert db2.get_regular_index() == 3
-
-
 def test_insert_attempt(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.db")
 
@@ -43,7 +30,6 @@ def test_insert_attempt(tmp_path: Path) -> None:
 def test_scheduling_settings_persist_without_yaml(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.db")
     settings = SchedulingSettings(
-        window_limit=2,
         schedule_times=["18:00", "06:00"],
         important_threads=[1],
         regular_threads=[10, 11],
@@ -88,6 +74,7 @@ def test_get_settings_migrates_missing_thread_domains(tmp_path: Path) -> None:
         payload = json.loads(connection.execute("SELECT payload FROM scheduling_settings WHERE id = 1").fetchone()[0])
     assert settings.thread_domains == {42: "lolz.live"}
     assert payload["thread_domains"] == {"42": "lolz.live"}
+    assert "window_limit" not in payload
 
 
 def test_token_and_dashboard_are_persisted(tmp_path: Path) -> None:

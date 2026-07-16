@@ -13,13 +13,6 @@ class Base(DeclarativeBase):
     pass
 
 
-class RuntimeState(Base):
-    __tablename__ = "runtime_state"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    regular_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-
-
 class BumpAttempt(Base):
     __tablename__ = "bump_attempts"
 
@@ -68,15 +61,7 @@ class Database:
     def __init__(self, sqlite_path: str | Path) -> None:
         self._engine = create_engine(f"sqlite:///{Path(sqlite_path)}")
         Base.metadata.create_all(self._engine)
-        self._ensure_runtime_state_row()
         self._ensure_settings_row()
-
-    def _ensure_runtime_state_row(self) -> None:
-        with Session(self._engine) as session:
-            state = session.get(RuntimeState, 1)
-            if state is None:
-                session.add(RuntimeState(id=1, regular_index=0))
-                session.commit()
 
     def _ensure_settings_row(self) -> None:
         with Session(self._engine) as session:
@@ -89,23 +74,6 @@ class Database:
                     )
                 )
                 session.commit()
-
-    def get_regular_index(self) -> int:
-        with Session(self._engine) as session:
-            state = session.get(RuntimeState, 1)
-            if state is None:  # pragma: no cover
-                return 0
-            return state.regular_index
-
-    def set_regular_index(self, value: int) -> None:
-        with Session(self._engine) as session:
-            state = session.get(RuntimeState, 1)
-            if state is None:  # pragma: no cover
-                state = RuntimeState(id=1, regular_index=value)
-                session.add(state)
-            else:
-                state.regular_index = value
-            session.commit()
 
     def insert_attempt(self, attempt: BumpAttemptCreate) -> None:
         with Session(self._engine) as session:

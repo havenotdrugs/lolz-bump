@@ -38,7 +38,6 @@ class PostingTemplate(BaseModel):
 
 
 class SchedulingSettings(BaseModel):
-    window_limit: int = Field(default=1, gt=0)
     schedule_times: list[str] = Field(default_factory=list)
     important_threads: list[int] = Field(default_factory=list)
     regular_threads: list[int] = Field(default_factory=list)
@@ -110,7 +109,7 @@ class SchedulingSettings(BaseModel):
         }
 
     @model_validator(mode="after")
-    def validate_limits(self) -> "SchedulingSettings":
+    def validate_consistency(self) -> "SchedulingSettings":
         if set(self.important_threads) & set(self.regular_threads):
             raise ValueError("thread cannot be both important and regular")
         configured_threads = set(self.important_threads + self.regular_threads)
@@ -124,14 +123,6 @@ class SchedulingSettings(BaseModel):
             thread_id: self.thread_domains.get(thread_id) or DEFAULT_THREAD_DOMAIN
             for thread_id in configured_threads
         }
-        for schedule_time in self.all_schedule_times():
-            important_count = sum(
-                1
-                for thread_id in self.important_threads
-                if self.is_thread_scheduled(thread_id, schedule_time)
-            )
-            if important_count > self.window_limit:
-                raise ValueError("important_threads count exceeds window_limit for at least one schedule")
         return self
 
     def all_schedule_times(self) -> list[str]:
